@@ -16,6 +16,9 @@ type Ruolo = 'admin' | 'viewer' | null
 export default function Home() {
   const [spese, setSpese] = useState<Spesa[]>([])
   const [errore, setErrore] = useState('')
+  const [caricamentoSpese, setCaricamentoSpese] = useState(false)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [roleLoading, setRoleLoading] = useState(false)
 
   const [userId, setUserId] = useState<string | null>(null)
   const [emailUtente, setEmailUtente] = useState('')
@@ -27,85 +30,189 @@ export default function Home() {
   const [data, setData] = useState(new Date().toISOString().split('T')[0])
   const [cosa, setCosa] = useState('')
   const [quanto, setQuanto] = useState('')
-
-  const [authLoading, setAuthLoading] = useState(true)
+  const [meseFiltro, setMeseFiltro] = useState('tutti')
+  const [ricerca, setRicerca] = useState('')
 
   useEffect(() => {
-    init()
+    let mounted = true
 
-    const { data: { subscription } } =
-      supabase.auth.onAuthStateChange(async (_event, session) => {
+    async function bootstrap() {
+      try {
+        setAuthLoading(true)
+
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession()
+
+        if (error) throw error
+        if (!mounted) return
+
         if (session?.user) {
-          await caricaUtente(session.user.id, session.user.email || '')
+          await inizializzaUtente(session.user.id, session.user.email || '')
         } else {
-          reset()
+          resetStatoUtente()
         }
-      })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  async function init() {
-    const { data: { session } } = await supabase.auth.getSession()
-
-    if (session?.user) {
-      await caricaUtente(session.user.id, session.user.email || '')
+      } catch (error) {
+        console.error('Errore bootstrap sessione:', error)
+        if (mounted) {
+          setErrore('Errore nel controllo sessione')
+          resetStatoUtente()
+        }
+      } finally {
+        if (mounted) setAuthLoading(false)
+      }
     }
 
-    setAuthLoading(false)
-  }
+    bootstrap()
 
-  function reset() {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return
+
+      try {
+        setAuthLoading(true)
+
+        if (session?.user) {
+          await inizializzaUtente(session.user.id, session.user.email || '')
+        } else {
+          resetStatoUtente()
+        }
+      } catch (error) {
+        console.error('Errore onAuthStateChange:', error)
+        if (mounted) {
+          setErrore('Errore nel cambio stato login')
+          resetStatoUtente()
+        }
+      } finally {
+        if (mounted) setAuthLoading(false)
+      }
+    })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
+  }, [])
+
+  function resetStatoUtente() {
     setUserId(null)
     setEmailUtente('')
     setRuolo(null)
     setSpese([])
   }
 
-  async function caricaUtente(id: string, email: string) {
+  async function inizializzaUtente(id: string, email: string) {
+    setErrore('')
     setUserId(id)
     setEmailUtente(email)
 
-    await caricaRuolo(id)
-    await caricaSpese()
-  }
+    const ruoloLetto = await caricaRuolo(id)
 
-  async function caricaRuolo(id: string) {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', id)
-      .single()
-
-    if (error) {
-      console.error(error)
-      setErrore('Errore ruolo')
+    if (!ruoloLetto) {
+      setSpese([])
       return
     }
 
-    setRuolo(data.role)
+    await caricaSpese()
+  }
+
+  async function caricaRuolo(id: string): Promise<Ruolo> {
+    try {
+      setRoleLoading(true)
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', id)
+        .single()
+
+      console.log('ID:', id)
+      console.log('DATA RUOLO:', data)
+      console.log('ERRORE RUOLO:', error)
+
+      if (error) {
+        console.error('Errore lettura ruolo:', error)
+        setErrore("Non riesco a leggere il ruolo dell'utente")
+        setRuolo(null)
+        return null
+      }
+
+      const ruoloDb = data?.role as Ruolo
+
+      if (ruoloDb !== 'admin' && ruoloDb !== 'viewer') {
+        setErrore('Ruolo utente non valido nel database')
+        setRuolo(null)
+        return null
+      }
+
+      setRuolo(ruoloDb)
+      return ruoloDb
+    } catch (error) {
+      console.error('Errore caricaRuolo:', error)
+      setErrore('Errore nel caricamento del ruolo')
+      setRuolo(null)
+      return null
+    } finally {
+      setRoleLoading(false)
+    }
   }
 
   async function caricaSpese() {
-    const { data, error } = await supabase
-      .from('spese')
-      .select('*')
-      .order('data', { ascending: false })
+    try {
+      setCaricamentoSpese(true)
 
-    if (!error) setSpese(data || [])
+      const { data, error } = await supabase
+        .from('spese')
+        .select('*')
+        .order('data', { ascending: false })
+
+      if (error) {
+        console.error('Errore lettura spese:', error)
+        setErrore(error.message)
+        return
+      }
+
+      setSpese(data || [])
+    } catch (error) {
+      console.error('Errore caricaSpese:', error)
+      setErrore('Errore nel caricamento spese')
+    } finally {
+      setCaricamentoSpese(false)
+    }
   }
 
   async function login(e: FormEvent) {
     e.preventDefault()
 
-    await supabase.auth.signInWithPassword({
+    if (!loginEmail || !loginPassword) {
+      setErrore('Inserisci email e password')
+      return
+    }
+
+    setErrore('')
+
+    const { error } = await supabase.auth.signInWithPassword({
       email: loginEmail,
       password: loginPassword,
     })
+
+    if (error) setErrore(error.message)
   }
 
   async function logout() {
-    await supabase.auth.signOut()
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      setErrore(error.message)
+      return
+    }
+
+    setLoginEmail('')
+    setLoginPassword('')
+    setErrore('')
+    resetStatoUtente()
     window.location.reload()
   }
 
@@ -114,60 +221,735 @@ export default function Home() {
 
     if (ruolo !== 'admin') return
 
-    await supabase.from('spese').insert([
-      {
-        data,
-        cosa,
-        quanto: Number(quanto),
-        pagato: false,
-      },
-    ])
+    if (!data || !cosa.trim() || !quanto) {
+      setErrore('Compila tutto')
+      return
+    }
 
-    await caricaSpese()
+    const importo = Number(quanto)
+
+    if (Number.isNaN(importo) || importo <= 0) {
+      setErrore('Inserisci un importo valido')
+      return
+    }
+
+    const { data: nuovaSpesa, error } = await supabase
+      .from('spese')
+      .insert([
+        {
+          data,
+          cosa: cosa.trim(),
+          quanto: importo,
+          pagato: false,
+        },
+      ])
+      .select()
+      .single()
+
+    if (error) {
+      setErrore(error.message)
+      return
+    }
+
+    setSpese((prev) => [nuovaSpesa, ...prev])
+    setData(new Date().toISOString().split('T')[0])
+    setCosa('')
+    setQuanto('')
+    setErrore('')
   }
 
-  const totale = useMemo(
-    () => spese.filter(s => !s.pagato).reduce((a, b) => a + b.quanto, 0),
-    [spese]
+  const mesiDisponibili = useMemo(() => {
+    const mesiUnici = Array.from(
+      new Set(
+        spese
+          .filter((spesa) => spesa.data)
+          .map((spesa) => spesa.data.slice(0, 7))
+      )
+    )
+
+    return mesiUnici.sort().reverse()
+  }, [spese])
+
+  const speseFiltrate = useMemo(() => {
+    let risultato = spese
+
+    if (meseFiltro !== 'tutti') {
+      risultato = risultato.filter(
+        (spesa) => spesa.data.slice(0, 7) === meseFiltro
+      )
+    }
+
+    if (ricerca.trim() !== '') {
+      const r = ricerca.toLowerCase().trim()
+
+      risultato = risultato.filter((spesa) => {
+        const testoCosa = spesa.cosa.toLowerCase()
+        const testoData = spesa.data.toLowerCase()
+        const testoImporto = String(spesa.quanto).toLowerCase()
+
+        return (
+          testoCosa.includes(r) ||
+          testoData.includes(r) ||
+          testoImporto.includes(r)
+        )
+      })
+    }
+
+    return risultato
+  }, [spese, meseFiltro, ricerca])
+
+  const daPagare = useMemo(
+    () =>
+      speseFiltrate
+        .filter((spesa) => !spesa.pagato)
+        .sort((a, b) => b.data.localeCompare(a.data)),
+    [speseFiltrate]
   )
 
-  if (authLoading) return <div style={{ padding: 40 }}>Caricamento...</div>
+  const storico = useMemo(
+    () =>
+      speseFiltrate
+        .filter((spesa) => spesa.pagato)
+        .sort((a, b) => b.data.localeCompare(a.data)),
+    [speseFiltrate]
+  )
+
+  const totaleDaPagare = useMemo(
+    () => daPagare.reduce((acc, spesa) => acc + Number(spesa.quanto), 0),
+    [daPagare]
+  )
+
+  function formattaMese(mese: string) {
+    const [anno, meseNumero] = mese.split('-')
+    const data = new Date(Number(anno), Number(meseNumero) - 1, 1)
+
+    return data.toLocaleDateString('it-IT', {
+      month: 'long',
+      year: 'numeric',
+    })
+  }
+
+  function formattaData(data: string) {
+    if (!data) return ''
+    return new Date(data).toLocaleDateString('it-IT')
+  }
+
+  function formattaImporto(importo: number) {
+    return new Intl.NumberFormat('it-IT', {
+      style: 'currency',
+      currency: 'EUR',
+    }).format(importo)
+  }
+
+  if (authLoading || (userId && roleLoading)) {
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          background: '#020617',
+          color: '#e5e7eb',
+          display: 'grid',
+          placeItems: 'center',
+          fontFamily: 'Inter, sans-serif',
+        }}
+      >
+        Caricamento...
+      </main>
+    )
+  }
 
   if (!userId) {
     return (
-      <form onSubmit={login} style={{ padding: 40 }}>
-        <input placeholder="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
-        <input placeholder="password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
-        <button>Login</button>
-      </form>
+      <>
+        <style jsx global>{`
+          html,
+          body {
+            margin: 0;
+            padding: 0;
+            background: #020617;
+            color: #e5e7eb;
+            font-family: Inter, Arial, sans-serif;
+          }
+          * {
+            box-sizing: border-box;
+          }
+          .login-page {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            background:
+              radial-gradient(circle at top, rgba(37, 99, 235, 0.14), transparent 30%),
+              linear-gradient(180deg, #020617 0%, #0f172a 100%);
+          }
+          .login-card {
+            width: 100%;
+            max-width: 420px;
+            background: rgba(30, 41, 59, 0.96);
+            border: 1px solid #334155;
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+          }
+          .title {
+            margin: 0 0 18px 0;
+            font-size: 30px;
+            font-weight: 900;
+            color: #f8fafc;
+          }
+          .input {
+            width: 100%;
+            padding: 13px 14px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            background: #0f172a;
+            color: #e5e7eb;
+            margin-bottom: 12px;
+          }
+          .button {
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 16px;
+            cursor: pointer;
+            font-weight: 800;
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: #fff;
+          }
+          .error {
+            margin-top: 14px;
+            color: #fca5a5;
+            font-weight: 700;
+          }
+          .note {
+            margin-top: 12px;
+            color: #94a3b8;
+            font-size: 14px;
+          }
+        `}</style>
+
+        <main className="login-page">
+          <div className="login-card">
+            <h1 className="title">Login</h1>
+
+            <form onSubmit={login}>
+              <input
+                className="input"
+                type="email"
+                placeholder="Email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+              />
+
+              <input
+                className="input"
+                type="password"
+                placeholder="Password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+              />
+
+              <button className="button" type="submit">
+                Entra
+              </button>
+            </form>
+
+            {errore && <p className="error">Errore: {errore}</p>}
+
+            <p className="note">
+              Admin = lettura e scrittura. Viewer = sola lettura.
+            </p>
+          </div>
+        </main>
+      </>
     )
   }
 
   return (
-    <div style={{ padding: 40 }}>
-      <h1>App spese</h1>
+    <>
+      <style jsx global>{`
+        :root {
+          color-scheme: dark;
+        }
 
-      <p>{emailUtente} - ruolo: {ruolo}</p>
+        html,
+        body {
+          margin: 0;
+          padding: 0;
+          background: #020617;
+          color: #e5e7eb;
+          font-family:
+            Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+            'Segoe UI', sans-serif;
+        }
 
-      <button onClick={logout}>Esci</button>
+        * {
+          box-sizing: border-box;
+        }
 
-      <h2>Totale da pagare: {totale} €</h2>
+        button,
+        input,
+        select {
+          font: inherit;
+        }
 
-      {ruolo === 'admin' && (
-        <form onSubmit={aggiungiSpesa}>
-          <input value={cosa} onChange={(e) => setCosa(e.target.value)} placeholder="Cosa" />
-          <input value={quanto} onChange={(e) => setQuanto(e.target.value)} placeholder="Quanto" />
-          <button>Aggiungi</button>
-        </form>
-      )}
+        input::placeholder {
+          color: #94a3b8;
+        }
 
-      <ul>
-        {spese.map((s) => (
-          <li key={s.id}>
-            {s.cosa} - {s.quanto}€
-          </li>
-        ))}
-      </ul>
-    </div>
+        .page {
+          min-height: 100vh;
+          padding: 32px 20px;
+          background:
+            radial-gradient(circle at top, rgba(37, 99, 235, 0.14), transparent 30%),
+            linear-gradient(180deg, #020617 0%, #0f172a 100%);
+        }
+
+        .container {
+          width: 100%;
+          max-width: 940px;
+          margin: 0 auto;
+        }
+
+        .card {
+          background: rgba(30, 41, 59, 0.96);
+          border: 1px solid #334155;
+          border-radius: 20px;
+          padding: 24px;
+          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+          backdrop-filter: blur(10px);
+        }
+
+        .card + .card {
+          margin-top: 18px;
+        }
+
+        .title-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin-bottom: 18px;
+        }
+
+        .title {
+          margin: 0;
+          font-size: 32px;
+          line-height: 1.05;
+          font-weight: 900;
+          color: #f8fafc;
+          letter-spacing: -0.03em;
+        }
+
+        .subtitle {
+          margin: 6px 0 0 0;
+          color: #94a3b8;
+          font-size: 14px;
+        }
+
+        .section-title {
+          margin: 0 0 16px 0;
+          font-size: 22px;
+          font-weight: 900;
+          color: #f8fafc;
+        }
+
+        .form-grid {
+          display: grid;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .input,
+        .select {
+          width: 100%;
+          padding: 13px 14px;
+          border-radius: 12px;
+          border: 1px solid #334155;
+          background: #0f172a;
+          color: #e5e7eb;
+          outline: none;
+        }
+
+        .button {
+          border: none;
+          border-radius: 12px;
+          padding: 10px 14px;
+          cursor: pointer;
+          font-weight: 800;
+        }
+
+        .button-primary {
+          background: linear-gradient(135deg, #2563eb, #1d4ed8);
+          color: #ffffff;
+        }
+
+        .button-success {
+          background: linear-gradient(135deg, #16a34a, #15803d);
+          color: #ffffff;
+        }
+
+        .button-secondary {
+          background: linear-gradient(135deg, #475569, #334155);
+          color: #ffffff;
+        }
+
+        .button-danger {
+          background: linear-gradient(135deg, #dc2626, #b91c1c);
+          color: #ffffff;
+        }
+
+        .button-ghost {
+          background: #0f172a;
+          color: #e5e7eb;
+          border: 1px solid #334155;
+        }
+
+        .error {
+          margin-top: 14px;
+          color: #fca5a5;
+          font-weight: 700;
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          align-items: end;
+        }
+
+        .search-box {
+          margin-top: 16px;
+        }
+
+        .stat-label {
+          margin: 0;
+          font-size: 13px;
+          font-weight: 800;
+          color: #94a3b8;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
+        }
+
+        .stat-value {
+          margin: 8px 0 0 0;
+          font-size: 34px;
+          font-weight: 900;
+          color: #f87171;
+        }
+
+        .list {
+          display: grid;
+          gap: 12px;
+        }
+
+        .item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 14px;
+          flex-wrap: wrap;
+          padding: 16px;
+          border-radius: 14px;
+          border: 1px solid #334155;
+          background: #0f172a;
+        }
+
+        .item-storico {
+          background: #020617;
+        }
+
+        .item-left {
+          min-width: 180px;
+          flex: 1;
+        }
+
+        .item-title {
+          margin: 0 0 6px 0;
+          font-size: 18px;
+          font-weight: 900;
+          color: #f8fafc;
+        }
+
+        .item-date {
+          margin: 0;
+          color: #94a3b8;
+          font-size: 14px;
+        }
+
+        .item-right {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+
+        .amount {
+          font-size: 20px;
+          font-weight: 900;
+          color: #f8fafc;
+          min-width: 115px;
+          text-align: right;
+        }
+
+        .badge {
+          display: inline-flex;
+          align-items: center;
+          padding: 7px 10px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+        }
+
+        .badge-open {
+          background: rgba(239, 68, 68, 0.12);
+          color: #fca5a5;
+          border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .badge-paid {
+          background: rgba(34, 197, 94, 0.12);
+          color: #86efac;
+          border: 1px solid rgba(34, 197, 94, 0.28);
+        }
+
+        .empty {
+          margin: 0;
+          color: #94a3b8;
+        }
+
+        .top-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          flex-wrap: wrap;
+          margin-bottom: 12px;
+        }
+
+        .small-note {
+          color: #94a3b8;
+          font-size: 14px;
+          margin: 0;
+        }
+
+        @media (max-width: 820px) {
+          .stats-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 720px) {
+          .page {
+            padding: 20px 14px;
+          }
+
+          .card {
+            padding: 18px;
+          }
+
+          .title {
+            font-size: 28px;
+          }
+
+          .section-title {
+            font-size: 20px;
+          }
+
+          .stat-value {
+            font-size: 28px;
+          }
+
+          .amount {
+            text-align: left;
+            min-width: auto;
+          }
+
+          .item-right {
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
+      `}</style>
+
+      <main className="page">
+        <div className="container">
+          <div className="card">
+            <div className="title-row">
+              <div>
+                <h1 className="title">App spese</h1>
+                <p className="subtitle">
+                  {emailUtente} · ruolo: {ruolo}
+                </p>
+              </div>
+
+              <button className="button button-ghost" onClick={logout}>
+                Esci
+              </button>
+            </div>
+
+            {ruolo === 'admin' && (
+              <form onSubmit={aggiungiSpesa}>
+                <div className="form-grid">
+                  <input
+                    className="input"
+                    type="date"
+                    value={data}
+                    onChange={(e) => setData(e.target.value)}
+                  />
+
+                  <input
+                    className="input"
+                    type="text"
+                    placeholder="Cosa"
+                    value={cosa}
+                    onChange={(e) => setCosa(e.target.value)}
+                  />
+
+                  <input
+                    className="input"
+                    type="number"
+                    placeholder="Quanto"
+                    value={quanto}
+                    onChange={(e) => setQuanto(e.target.value)}
+                  />
+                </div>
+
+                <button type="submit" className="button button-primary">
+                  Aggiungi spesa
+                </button>
+              </form>
+            )}
+
+            {ruolo === 'viewer' && (
+              <p className="small-note">
+                Sei in sola lettura. Puoi vedere tutto ma non modificare.
+              </p>
+            )}
+
+            {errore && <p className="error">Errore: {errore}</p>}
+          </div>
+
+          <div className="card">
+            <div className="stats-grid">
+              <div>
+                <p className="stat-label">Totale da pagare</p>
+                <p className="stat-value">
+                  {formattaImporto(totaleDaPagare)}
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="meseFiltro"
+                  className="stat-label"
+                  style={{ display: 'block', marginBottom: 8 }}
+                >
+                  Filtro mese
+                </label>
+
+                <select
+                  id="meseFiltro"
+                  className="select"
+                  value={meseFiltro}
+                  onChange={(e) => setMeseFiltro(e.target.value)}
+                >
+                  <option value="tutti">Tutti i mesi</option>
+                  {mesiDisponibili.map((mese) => (
+                    <option key={mese} value={mese}>
+                      {formattaMese(mese)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="search-box">
+              <label
+                htmlFor="ricerca"
+                className="stat-label"
+                style={{ display: 'block', marginBottom: 8 }}
+              >
+                Cerca
+              </label>
+
+              <input
+                id="ricerca"
+                className="input"
+                type="text"
+                placeholder="Cerca per nome, data o importo..."
+                value={ricerca}
+                onChange={(e) => setRicerca(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <section className="card">
+            <div className="top-row">
+              <h2 className="section-title">Da pagare</h2>
+              <p className="small-note">{daPagare.length} voci</p>
+            </div>
+
+            {caricamentoSpese ? (
+              <p className="empty">Caricamento...</p>
+            ) : daPagare.length === 0 ? (
+              <p className="empty">Nessuna spesa da pagare</p>
+            ) : (
+              <div className="list">
+                {daPagare.map((spesa) => (
+                  <div key={spesa.id} className="item">
+                    <div className="item-left">
+                      <p className="item-title">{spesa.cosa}</p>
+                      <p className="item-date">{formattaData(spesa.data)}</p>
+                    </div>
+
+                    <div className="item-right">
+                      <span className="badge badge-open">Da pagare</span>
+                      <div className="amount">
+                        {formattaImporto(Number(spesa.quanto))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <div className="top-row">
+              <h2 className="section-title">Storico</h2>
+              <p className="small-note">{storico.length} voci</p>
+            </div>
+
+            {caricamentoSpese ? (
+              <p className="empty">Caricamento...</p>
+            ) : storico.length === 0 ? (
+              <p className="empty">Nessuna spesa nello storico</p>
+            ) : (
+              <div className="list">
+                {storico.map((spesa) => (
+                  <div key={spesa.id} className="item item-storico">
+                    <div className="item-left">
+                      <p className="item-title">{spesa.cosa}</p>
+                      <p className="item-date">{formattaData(spesa.data)}</p>
+                    </div>
+
+                    <div className="item-right">
+                      <span className="badge badge-paid">Pagato</span>
+                      <div className="amount">
+                        {formattaImporto(Number(spesa.quanto))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+    </>
   )
 }
