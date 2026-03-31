@@ -17,10 +17,6 @@ export default function Home() {
   const [spese, setSpese] = useState<Spesa[]>([])
   const [errore, setErrore] = useState('')
 
-  const [authLoading, setAuthLoading] = useState(true)
-  const [roleLoading, setRoleLoading] = useState(false)
-  const [caricamentoSpese, setCaricamentoSpese] = useState(false)
-
   const [userId, setUserId] = useState<string | null>(null)
   const [emailUtente, setEmailUtente] = useState('')
   const [ruolo, setRuolo] = useState<Ruolo>(null)
@@ -32,100 +28,71 @@ export default function Home() {
   const [cosa, setCosa] = useState('')
   const [quanto, setQuanto] = useState('')
 
+  const [authLoading, setAuthLoading] = useState(true)
+
   useEffect(() => {
-    bootstrap()
+    init()
 
     const { data: { subscription } } =
       supabase.auth.onAuthStateChange(async (_event, session) => {
         if (session?.user) {
-          await inizializzaUtente(session.user.id, session.user.email || '')
+          await caricaUtente(session.user.id, session.user.email || '')
         } else {
-          resetUtente()
+          reset()
         }
       })
 
-    return () => {
-      subscription.unsubscribe()
-    }
+    return () => subscription.unsubscribe()
   }, [])
 
-  async function bootstrap() {
+  async function init() {
     const { data: { session } } = await supabase.auth.getSession()
 
     if (session?.user) {
-      await inizializzaUtente(session.user.id, session.user.email || '')
+      await caricaUtente(session.user.id, session.user.email || '')
     }
 
     setAuthLoading(false)
   }
 
-  function resetUtente() {
+  function reset() {
     setUserId(null)
     setEmailUtente('')
     setRuolo(null)
     setSpese([])
   }
 
-  async function inizializzaUtente(id: string, email: string) {
+  async function caricaUtente(id: string, email: string) {
     setUserId(id)
     setEmailUtente(email)
 
-    const ruoloLetto = await caricaRuolo(id)
-
-    if (!ruoloLetto) return
-
+    await caricaRuolo(id)
     await caricaSpese()
   }
 
-  // 🔥 QUI IL DEBUG
-  async function caricaRuolo(id: string): Promise<Ruolo> {
-    try {
-      setRoleLoading(true)
+  async function caricaRuolo(id: string) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', id)
+      .single()
 
-      console.log('USER ID:', id)
-
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', id)
-        .single()
-
-      console.log('DATA:', data)
-      console.log('ERROR:', error)
-
-      if (error) {
-        setErrore('Errore lettura ruolo')
-
-        // 🔥 TEST: forza admin
-        setRuolo('admin')
-
-        return 'admin'
-      }
-
-      setRuolo(data.role)
-      return data.role
-    } catch (err) {
-      console.error('ERRORE GRAVE:', err)
-      setRuolo(null)
-      return null
-    } finally {
-      setRoleLoading(false)
+    if (error) {
+      console.error(error)
+      setErrore('Errore ruolo')
+      return
     }
+
+    setRuolo(data.role)
   }
 
   async function caricaSpese() {
-    setCaricamentoSpese(true)
-
     const { data, error } = await supabase
       .from('spese')
       .select('*')
       .order('data', { ascending: false })
 
-    if (!error) {
-      setSpese(data || [])
-    }
-
-    setCaricamentoSpese(false)
+    if (!error) setSpese(data || [])
   }
 
   async function login(e: FormEvent) {
@@ -137,7 +104,6 @@ export default function Home() {
     })
   }
 
-  // 🔥 LOGOUT SICURO
   async function logout() {
     await supabase.auth.signOut()
     window.location.reload()
@@ -160,24 +126,18 @@ export default function Home() {
     await caricaSpese()
   }
 
-  if (authLoading || (userId && roleLoading)) {
-    return <div style={{ padding: 40 }}>Caricamento...</div>
-  }
+  const totale = useMemo(
+    () => spese.filter(s => !s.pagato).reduce((a, b) => a + b.quanto, 0),
+    [spese]
+  )
+
+  if (authLoading) return <div style={{ padding: 40 }}>Caricamento...</div>
 
   if (!userId) {
     return (
       <form onSubmit={login} style={{ padding: 40 }}>
-        <input
-          placeholder="email"
-          value={loginEmail}
-          onChange={(e) => setLoginEmail(e.target.value)}
-        />
-        <input
-          placeholder="password"
-          type="password"
-          value={loginPassword}
-          onChange={(e) => setLoginPassword(e.target.value)}
-        />
+        <input placeholder="email" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+        <input placeholder="password" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} />
         <button>Login</button>
       </form>
     )
@@ -187,16 +147,16 @@ export default function Home() {
     <div style={{ padding: 40 }}>
       <h1>App spese</h1>
 
-      <p>
-        {emailUtente} - ruolo: {ruolo}
-      </p>
+      <p>{emailUtente} - ruolo: {ruolo}</p>
 
       <button onClick={logout}>Esci</button>
 
+      <h2>Totale da pagare: {totale} €</h2>
+
       {ruolo === 'admin' && (
         <form onSubmit={aggiungiSpesa}>
-          <input value={cosa} onChange={(e) => setCosa(e.target.value)} />
-          <input value={quanto} onChange={(e) => setQuanto(e.target.value)} />
+          <input value={cosa} onChange={(e) => setCosa(e.target.value)} placeholder="Cosa" />
+          <input value={quanto} onChange={(e) => setQuanto(e.target.value)} placeholder="Quanto" />
           <button>Aggiungi</button>
         </form>
       )}
@@ -204,7 +164,7 @@ export default function Home() {
       <ul>
         {spese.map((s) => (
           <li key={s.id}>
-            {s.cosa} - {s.quanto}
+            {s.cosa} - {s.quanto}€
           </li>
         ))}
       </ul>
