@@ -18,7 +18,7 @@ export default function Home() {
   const [errore, setErrore] = useState('')
   const [caricamentoSpese, setCaricamentoSpese] = useState(false)
   const [authLoading, setAuthLoading] = useState(true)
-  const [roleLoading, setRoleLoading] = useState(false)
+  const [roleLoading, setRoleLoading] = useState(true)
 
   const [userId, setUserId] = useState<string | null>(null)
   const [emailUtente, setEmailUtente] = useState('')
@@ -101,6 +101,7 @@ export default function Home() {
     setEmailUtente('')
     setRuolo(null)
     setSpese([])
+    setRoleLoading(false)
   }
 
   async function inizializzaUtente(id: string, email: string) {
@@ -127,10 +128,6 @@ export default function Home() {
         .select('role')
         .eq('id', id)
         .single()
-
-      console.log('ID:', id)
-      console.log('DATA RUOLO:', data)
-      console.log('ERRORE RUOLO:', error)
 
       if (error) {
         console.error('Errore lettura ruolo:', error)
@@ -341,7 +338,7 @@ export default function Home() {
     }).format(importo)
   }
 
-  if (authLoading || (userId && roleLoading)) {
+  if (authLoading || roleLoading) {
     return (
       <main
         style={{
@@ -582,21 +579,6 @@ export default function Home() {
 
         .button-primary {
           background: linear-gradient(135deg, #2563eb, #1d4ed8);
-          color: #ffffff;
-        }
-
-        .button-success {
-          background: linear-gradient(135deg, #16a34a, #15803d);
-          color: #ffffff;
-        }
-
-        .button-secondary {
-          background: linear-gradient(135deg, #475569, #334155);
-          color: #ffffff;
-        }
-
-        .button-danger {
-          background: linear-gradient(135deg, #dc2626, #b91c1c);
           color: #ffffff;
         }
 
