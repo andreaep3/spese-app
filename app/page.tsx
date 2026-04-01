@@ -1,3 +1,4 @@
+resta bloccato
 'use client'
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
@@ -9,7 +10,7 @@ type Spesa = {
   cosa: string
   quanto: number
   pagato: boolean
-  created_at?: string
+  'created at': string
 }
 
 type Ruolo = 'admin' | 'viewer' | null
@@ -17,14 +18,12 @@ type Ruolo = 'admin' | 'viewer' | null
 export default function Home() {
   const [spese, setSpese] = useState<Spesa[]>([])
   const [errore, setErrore] = useState('')
-  const [caricamento, setCaricamento] = useState(false)
+  const [caricamento, setCaricamento] = useState(true)
 
   const [userId, setUserId] = useState<string | null>(null)
   const [emailUtente, setEmailUtente] = useState('')
   const [ruolo, setRuolo] = useState<Ruolo>(null)
-
   const [authLoading, setAuthLoading] = useState(true)
-  const [roleLoading, setRoleLoading] = useState(false)
 
   const [loginEmail, setLoginEmail] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
@@ -36,128 +35,85 @@ export default function Home() {
   const [ricerca, setRicerca] = useState('')
 
   useEffect(() => {
-    let mounted = true
+    controllaSessione()
 
-    async function init() {
-      try {
-        setAuthLoading(true)
-
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession()
-
-        if (error) throw error
-        if (!mounted) return
-
-        if (session?.user) {
-          await inizializzaUtente(session.user.id, session.user.email || '')
-        } else {
-          resetUtente()
-        }
-      } catch (error) {
-        console.error('Errore init:', error)
-        if (mounted) {
-          setErrore('Errore nel controllo sessione')
-          resetUtente()
-        }
-      } finally {
-        if (mounted) setAuthLoading(false)
-      }
-    }
-
-    init()
+    const timeout = setTimeout(() => {
+      setAuthLoading(false)
+    }, 5000)
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return
-
       try {
-        setAuthLoading(true)
-
         if (session?.user) {
-          await inizializzaUtente(session.user.id, session.user.email || '')
+          setUserId(session.user.id)
+          setEmailUtente(session.user.email || '')
+          await caricaRuolo(session.user.id)
+          await caricaSpese()
         } else {
-          resetUtente()
+          setUserId(null)
+          setEmailUtente('')
+          setRuolo(null)
+          setSpese([])
         }
       } catch (error) {
         console.error('Errore onAuthStateChange:', error)
-        if (mounted) {
-          setErrore('Errore nel cambio stato login')
-          resetUtente()
-        }
+        setErrore('Errore nel cambio stato login')
       } finally {
-        if (mounted) setAuthLoading(false)
+        setAuthLoading(false)
       }
     })
 
     return () => {
-      mounted = false
+      clearTimeout(timeout)
       subscription.unsubscribe()
     }
   }, [])
 
-  function resetUtente() {
-    setUserId(null)
-    setEmailUtente('')
-    setRuolo(null)
-    setSpese([])
-    setRoleLoading(false)
-  }
-
-  async function inizializzaUtente(id: string, email: string) {
-    setErrore('')
-    setUserId(id)
-    setEmailUtente(email)
-
-    const ruoloLetto = await caricaRuolo(id)
-    if (!ruoloLetto) {
-      setSpese([])
-      return
-    }
-
-    await caricaSpese()
-  }
-
-  async function caricaRuolo(id: string): Promise<Ruolo> {
+  async function controllaSessione() {
     try {
-      setRoleLoading(true)
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
 
+      if (session?.user) {
+        setUserId(session.user.id)
+        setEmailUtente(session.user.email || '')
+        await caricaRuolo(session.user.id)
+        await caricaSpese()
+      } else {
+        setUserId(null)
+        setEmailUtente('')
+        setRuolo(null)
+        setSpese([])
+      }
+    } catch (error) {
+      console.error('Errore controllaSessione:', error)
+      setErrore('Errore nel controllo sessione')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  async function caricaRuolo(id: string) {
+    try {
       const { data, error } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', id)
         .single()
 
-      console.log('ID:', id)
-      console.log('DATA RUOLO:', data)
-      console.log('ERRORE RUOLO:', error)
-
       if (error) {
-        console.error('Errore lettura ruolo:', error)
         setErrore("Non riesco a leggere il ruolo dell'utente")
         setRuolo(null)
-        return null
+        return
       }
 
-      const ruoloDb = data?.role as Ruolo
-
-      if (ruoloDb !== 'admin' && ruoloDb !== 'viewer') {
-        setErrore('Ruolo utente non valido nel database')
-        setRuolo(null)
-        return null
-      }
-
-      setRuolo(ruoloDb)
-      return ruoloDb
+      setRuolo(data.role as Ruolo)
     } catch (error) {
       console.error('Errore caricaRuolo:', error)
       setErrore('Errore nel caricamento del ruolo')
       setRuolo(null)
-      return null
-    } finally {
-      setRoleLoading(false)
     }
   }
 
@@ -171,12 +127,12 @@ export default function Home() {
         .order('data', { ascending: false })
 
       if (error) {
-        console.error('Errore lettura spese:', error)
         setErrore(error.message)
         return
       }
 
-      setSpese((data || []) as Spesa[])
+      setErrore('')
+      setSpese(data || [])
     } catch (error) {
       console.error('Errore caricaSpese:', error)
       setErrore('Errore nel caricamento spese')
@@ -200,22 +156,16 @@ export default function Home() {
       password: loginPassword,
     })
 
-    if (error) setErrore(error.message)
+    if (error) {
+      setErrore(error.message)
+    }
   }
 
   async function logout() {
-    const { error } = await supabase.auth.signOut()
-
-    if (error) {
-      setErrore(error.message)
-      return
-    }
-
+    await supabase.auth.signOut()
     setLoginEmail('')
     setLoginPassword('')
     setErrore('')
-    resetUtente()
-    window.location.reload()
   }
 
   async function aggiungiSpesa(e: FormEvent) {
@@ -253,7 +203,7 @@ export default function Home() {
       return
     }
 
-    setSpese((prev) => [nuovaSpesa as Spesa, ...prev])
+    setSpese((prev) => [nuovaSpesa, ...prev])
     setData(new Date().toISOString().split('T')[0])
     setCosa('')
     setQuanto('')
@@ -383,7 +333,7 @@ export default function Home() {
     }).format(importo)
   }
 
-  if (authLoading || (userId && roleLoading)) {
+  if (authLoading) {
     return (
       <main
         style={{
@@ -824,7 +774,7 @@ export default function Home() {
               <div>
                 <h1 className="title">App spese</h1>
                 <p className="subtitle">
-                  {emailUtente} · ruolo: {ruolo}
+                  {emailUtente} · ruolo: {ruolo === 'admin' ? 'admin' : 'viewer'}
                 </p>
               </div>
 
