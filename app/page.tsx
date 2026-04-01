@@ -33,58 +33,21 @@ export default function Home() {
   const [meseFiltro, setMeseFiltro] = useState('tutti')
   const [ricerca, setRicerca] = useState('')
 
-  useEffect(() => {
-    controllaSessione()
+useEffect(() => {
+  let mounted = true
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      try {
-        if (session?.user) {
-          setUserId(session.user.id)
-          setEmailUtente(session.user.email || '')
-          await caricaRuolo(session.user.id)
-
-          // ✅ la pagina può uscire dal loading appena sessione+ruolo sono pronti
-          setAuthLoading(false)
-
-          // ✅ le spese si caricano dopo, senza bloccare tutta la pagina
-          caricaSpese()
-        } else {
-          setUserId(null)
-          setEmailUtente('')
-          setRuolo(null)
-          setSpese([])
-          setAuthLoading(false)
-        }
-      } catch (error) {
-        console.error('Errore onAuthStateChange:', error)
-        setErrore('Errore nel cambio stato login')
-        setAuthLoading(false)
-      }
-    })
-
-    return () => {
-      subscription.unsubscribe()
-    }
-  }, [])
-
-  async function controllaSessione() {
+  async function gestisciSessione(session: { user?: { id: string; email?: string | null } } | null) {
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-
       if (session?.user) {
         setUserId(session.user.id)
         setEmailUtente(session.user.email || '')
         await caricaRuolo(session.user.id)
 
-        // ✅ sblocca subito la pagina
+        if (!mounted) return
         setAuthLoading(false)
 
-        // ✅ carica spese dopo
-        caricaSpese()
+        // non bloccare il render mentre carichi le spese
+        void caricaSpese()
       } else {
         setUserId(null)
         setEmailUtente('')
@@ -93,12 +56,53 @@ export default function Home() {
         setAuthLoading(false)
       }
     } catch (error) {
-      console.error('Errore controllaSessione:', error)
-      setErrore('Errore nel controllo sessione')
+      console.error('Errore gestione sessione:', error)
+      setErrore('Errore nel cambio stato login')
       setAuthLoading(false)
     }
   }
 
+  void controllaSessione()
+
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((_event, session) => {
+    if (!mounted) return
+    void gestisciSessione(session)
+  })
+
+  return () => {
+    mounted = false
+    subscription.unsubscribe()
+  }
+}, [])
+
+async function controllaSessione() {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+
+    if (session?.user) {
+      setUserId(session.user.id)
+      setEmailUtente(session.user.email || '')
+      await caricaRuolo(session.user.id)
+      setAuthLoading(false)
+      void caricaSpese()
+      return
+    }
+
+    setUserId(null)
+    setEmailUtente('')
+    setRuolo(null)
+    setSpese([])
+    setAuthLoading(false)
+  } catch (error) {
+    console.error('Errore controllaSessione:', error)
+    setErrore('Errore nel controllo sessione')
+    setAuthLoading(false)
+  }
+}
   async function caricaRuolo(id: string) {
     try {
       const { data, error } = await supabase
