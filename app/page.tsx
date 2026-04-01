@@ -1,4 +1,3 @@
-resta bloccato
 'use client'
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
@@ -37,10 +36,6 @@ export default function Home() {
   useEffect(() => {
     controllaSessione()
 
-    const timeout = setTimeout(() => {
-      setAuthLoading(false)
-    }, 5000)
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -49,23 +44,27 @@ export default function Home() {
           setUserId(session.user.id)
           setEmailUtente(session.user.email || '')
           await caricaRuolo(session.user.id)
-          await caricaSpese()
+
+          // ✅ la pagina può uscire dal loading appena sessione+ruolo sono pronti
+          setAuthLoading(false)
+
+          // ✅ le spese si caricano dopo, senza bloccare tutta la pagina
+          caricaSpese()
         } else {
           setUserId(null)
           setEmailUtente('')
           setRuolo(null)
           setSpese([])
+          setAuthLoading(false)
         }
       } catch (error) {
         console.error('Errore onAuthStateChange:', error)
         setErrore('Errore nel cambio stato login')
-      } finally {
         setAuthLoading(false)
       }
     })
 
     return () => {
-      clearTimeout(timeout)
       subscription.unsubscribe()
     }
   }, [])
@@ -80,17 +79,22 @@ export default function Home() {
         setUserId(session.user.id)
         setEmailUtente(session.user.email || '')
         await caricaRuolo(session.user.id)
-        await caricaSpese()
+
+        // ✅ sblocca subito la pagina
+        setAuthLoading(false)
+
+        // ✅ carica spese dopo
+        caricaSpese()
       } else {
         setUserId(null)
         setEmailUtente('')
         setRuolo(null)
         setSpese([])
+        setAuthLoading(false)
       }
     } catch (error) {
       console.error('Errore controllaSessione:', error)
       setErrore('Errore nel controllo sessione')
-    } finally {
       setAuthLoading(false)
     }
   }
